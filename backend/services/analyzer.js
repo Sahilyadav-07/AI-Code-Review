@@ -32,7 +32,15 @@ function buildUserPrompt(path, content) {
 }
 
 function safeParseJSON(text) {
-  const cleaned = text.replace(/```json|```/g, "").trim();
+  if (typeof text !== "string" || !text.trim()) {
+    throw new Error("Model returned an empty or invalid response");
+  }
+
+  const cleaned = text
+    .replace(/```json/gi, "")
+    .replace(/```/g, "")
+    .trim();
+
   try {
     return JSON.parse(cleaned);
   } catch (err) {
@@ -58,7 +66,7 @@ async function callOpenRouter(messages) {
     {
       model,
       messages,
-      max_tokens: 2000,
+      max_tokens: 1200,
       temperature: 0.2,
     },
     {
@@ -85,12 +93,18 @@ async function callOpenRouter(messages) {
 export async function analyzeFile({ path, content }) {
   // Truncate defensively — the caller already caps file size, but this is a
   // second line of defense against unexpectedly large files.
-  const trimmedContent = content.slice(0, 40_000);
+  const trimmedContent = content.slice(0, 16_000);
 
-  const text = await callOpenRouter([
-    { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: buildUserPrompt(path, trimmedContent) },
-  ]);
+  const startedAt = Date.now();
+
+const text = await callOpenRouter([
+  { role: "system", content: SYSTEM_PROMPT },
+  { role: "user", content: buildUserPrompt(path, trimmedContent) },
+]);
+
+console.log(
+  `[AI Review] ${path}: ${((Date.now() - startedAt) / 1000).toFixed(1)}s`
+);
 
   const parsed = safeParseJSON(text);
   return {
@@ -105,7 +119,7 @@ export async function analyzeFile({ path, content }) {
  * Analyzes all files with limited concurrency to stay well under
  * API rate limits. Returns per-file results plus an aggregated report.
  */
-export async function analyzeRepo(files, concurrency = 3) {
+export async function analyzeRepo(files, concurrency = 4) {
   const results = [];
   const queue = [...files];
 
@@ -128,7 +142,17 @@ export async function analyzeRepo(files, concurrency = 3) {
     }
   }
 
-  await Promise.all(Array.from({ length: concurrency }, worker));
+const startedAt = Date.now();
+
+await Promise.all(
+  Array.from({ length: concurrency }, worker)
+);
+
+const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+
+console.log(
+  `[AI Review] Analyzed ${results.length} files in ${elapsedSeconds} seconds`
+);
 
   const scored = results.filter((r) => typeof r.qualityScore === "number");
   const overallScore = scored.length
